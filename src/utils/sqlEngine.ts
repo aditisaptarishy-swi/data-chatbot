@@ -41,8 +41,8 @@ export class SQLEngine {
   static async loadSampleData(): Promise<void> {
     await this.initialize();
     
-    // Load the sample CSV data
-    const response = await fetch('/sample-data.csv');
+    // Load the sample CSV data with StateCode column
+    const response = await fetch('/sample-data-with-states.csv');
     const csvText = await response.text();
     
     const data = Papa.parse(csvText, {
@@ -219,8 +219,8 @@ export class SQLEngine {
     
     let result = [...table.data];
     
-    // Apply WHERE clause
-    const whereMatch = normalizedQuery.match(/where\s+(.+?)(?:\s+group\s+by|\s+order\s+by|\s+limit|$)/);
+    // Apply WHERE clause - use original query to preserve case
+    const whereMatch = query.match(/WHERE\s+(.+?)(?:\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/i);
     if (whereMatch) {
       const whereClause = whereMatch[1].trim();
       result = this.applyWhereClause(result, whereClause);
@@ -261,13 +261,15 @@ export class SQLEngine {
 
   private static applyWhereClause(data: Record<string, any>[], whereClause: string): Record<string, any>[] {
     // Handle simple equality conditions: column = 'value' or column = value
-    const equalityMatch = whereClause.match(/(\w+)\s*=\s*['"]([^'"]+)['"]|(\w+)\s*=\s*([^'"\s]+)/);
+    const equalityMatch = whereClause.match(/(\w+)\s*=\s*['"]([^'"]+)['"]|(\w+)\s*=\s*([^'"\s;]+)/);
+    
     if (equalityMatch) {
       const column = equalityMatch[1] || equalityMatch[3];
       const value = equalityMatch[2] || equalityMatch[4];
       
       return data.filter(row => {
         const rowValue = row[column];
+        
         // Handle string comparison (case-insensitive)
         if (typeof rowValue === 'string' && typeof value === 'string') {
           return rowValue.toLowerCase() === value.toLowerCase();
