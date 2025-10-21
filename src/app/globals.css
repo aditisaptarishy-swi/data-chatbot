@@ -1,26 +1,133 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --card: #111111;
+  --card-foreground: #ededed;
+  --popover: #111111;
+  --popover-foreground: #ededed;
+  --primary: #3b82f6;
+  --primary-foreground: #f8fafc;
+  --secondary: #1e293b;
+  --secondary-foreground: #f1f5f9;
+  --muted: #1e293b;
+  --muted-foreground: #94a3b8;
+  --accent: #1e293b;
+  --accent-foreground: #f1f5f9;
+  --destructive: #ef4444;
+  --destructive-foreground: #f8fafc;
+  --border: #27272a;
+  --input: #27272a;
+  --ring: #3b82f6;
+  --radius: 0.5rem;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  border-color: hsl(var(--border));
 }
 
 body {
-  background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--background);
+  font-feature-settings: "rlig" 1, "calt" 1;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1a1a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #404040;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Chat message animations */
+.message-enter {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.message-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 300ms, transform 300ms;
+}
+
+/* Loading animation */
+.loading-dots {
+  display: inline-block;
+}
+
+.loading-dots::after {
+  content: '';
+  animation: dots 1.5s steps(4, end) infinite;
+}
+
+@keyframes dots {
+  0%, 20% {
+    color: rgba(0,0,0,0);
+    text-shadow:
+      .25em 0 0 rgba(255,255,255,0),
+      .5em 0 0 rgba(255,255,255,0),
+      .75em 0 0 rgba(255,255,255,0);
+  }
+  40% {
+    color: white;
+    text-shadow:
+      .25em 0 0 rgba(255,255,255,0),
+      .5em 0 0 rgba(255,255,255,0),
+      .75em 0 0 rgba(255,255,255,0);
+  }
+  60% {
+    text-shadow:
+      .25em 0 0 white,
+      .5em 0 0 rgba(255,255,255,0),
+      .75em 0 0 rgba(255,255,255,0);
+  }
+  80%, 100% {
+    text-shadow:
+      .25em 0 0 white,
+      .5em 0 0 white,
+      .75em 0 0 white;
+  }
+}
+
+/* Table styles */
+.data-table {
+  @apply w-full border-collapse;
+}
+
+.data-table th {
+  @apply bg-gray-800 text-left p-3 font-medium text-gray-200 border-b border-gray-700;
+}
+
+.data-table td {
+  @apply p-3 border-b border-gray-800 text-gray-300;
+}
+
+.data-table tr:hover {
+  @apply bg-gray-900;
+}
+
+/* Chart container */
+.chart-container {
+  @apply bg-gray-900 rounded-lg p-4 border border-gray-800;
 }
