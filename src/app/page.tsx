@@ -9,6 +9,7 @@ import { SQLEngine } from '@/utils/sqlEngine';
 
 export default function Home() {
   const [currentDataset, setCurrentDataset] = useState<Dataset | null>(null);
+  const [isConnectingToDatabase, setIsConnectingToDatabase] = useState(false);
 
   const handleDatasetUploaded = (dataset: Dataset) => {
     setCurrentDataset(dataset);
@@ -16,6 +17,65 @@ export default function Home() {
 
   const handleNewAnalysis = () => {
     setCurrentDataset(null);
+  };
+
+  const handleConnectToUSDB = async () => {
+    setIsConnectingToDatabase(true);
+    try {
+      console.log('🔌 Connecting to USDB database...');
+      
+      const response = await fetch('/api/usdb/connect', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const result = await response.json();
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to connect to database');
+      }
+
+      console.log(`✅ Successfully connected to database with ${result.tablesCount} tables`);
+
+      // Create a database dataset
+      const databaseDataset: Dataset = {
+        id: 'usdb-' + Date.now(),
+        name: 'USDB Database Connection',
+        data: [], // No data preview for database connections
+        schema: {
+          tableName: 'database',
+          columns: [] // Schema will be determined dynamically based on queries
+        },
+        uploadedAt: new Date(),
+        isDatabase: true,
+        connectionInfo: {
+          connected: true,
+          tablesCount: result.tablesCount,
+          lastConnected: new Date()
+        }
+      };
+
+      setCurrentDataset(databaseDataset);
+      console.log('Database connection established successfully');
+      
+    } catch (error) {
+      console.error('❌ Failed to connect to database:', error);
+      
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      
+      // Show a more detailed error message
+      if (errorMessage.includes('Deny Public Network Access')) {
+        alert(`🚫 Database Connection Blocked\n\nThe Azure SQL Server has public network access disabled. This is a security setting that prevents connections from outside the Azure network.\n\nTo resolve this:\n1. Contact your database administrator\n2. Request to whitelist your IP address\n3. Or ask to enable public network access\n\nTechnical details: ${errorMessage}`);
+      } else if (errorMessage.includes('authentication')) {
+        alert(`🔐 Authentication Failed\n\nYour Azure Active Directory credentials don't have permission to access this database.\n\nPlease contact your database administrator to grant you the necessary permissions.\n\nTechnical details: ${errorMessage}`);
+      } else {
+        alert(`❌ Database Connection Failed\n\n${errorMessage}\n\nPlease check your network connection and try again. If the problem persists, contact your system administrator.`);
+      }
+    } finally {
+      setIsConnectingToDatabase(false);
+    }
   };
 
   const handleLoadDemo = async () => {
@@ -30,7 +90,7 @@ export default function Home() {
 
       const demoDataset: Dataset = {
         id: 'demo-' + Date.now(),
-        name: 'sample-employees.csv',
+        name: 'sample-automotive-data.csv',
         data: sampleData,
         schema: {
           tableName: 'dataset',
@@ -63,7 +123,7 @@ export default function Home() {
 
       const fallbackDataset: Dataset = {
         id: 'demo-' + Date.now(),
-        name: 'sample-employees.csv',
+        name: 'sample-automotive-data.csv (fallback)',
         data: demoData,
         schema: {
           tableName: 'dataset',
@@ -112,12 +172,34 @@ export default function Home() {
                 
                 <div className="text-center">
                   <div className="text-sm text-gray-500 mb-2">or</div>
-                  <button
-                    onClick={handleLoadDemo}
-                    className="px-6 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors duration-200 text-sm border border-gray-700"
-                  >
-                    Try Demo with Sample Data
-                  </button>
+                  <div className="flex gap-3 justify-center">
+                    <button
+                      onClick={handleConnectToUSDB}
+                      disabled={isConnectingToDatabase}
+                      className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:cursor-not-allowed text-white rounded-lg transition-colors duration-200 text-sm border border-blue-500 flex items-center gap-2"
+                    >
+                      {isConnectingToDatabase ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                          Connecting...
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 1.79 4 4 4h8c2.21 0 4-1.79 4-4V7c0-2.21-1.79-4-4-4H8c-2.21 0-4 1.79-4 4z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 11l3 3 3-3" />
+                          </svg>
+                          Connect to USDB Data
+                        </>
+                      )}
+                    </button>
+                    <button
+                      onClick={handleLoadDemo}
+                      className="px-6 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors duration-200 text-sm border border-gray-700"
+                    >
+                      Try Demo with Sample Data
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -162,11 +244,29 @@ export default function Home() {
             <div className="bg-gray-900 border-b border-gray-800 p-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-xl font-semibold text-white">
-                    Analyzing: {currentDataset.name}
+                  <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+                    {currentDataset.isDatabase ? (
+                      <>
+                        <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 1.79 4 4 4h8c2.21 0 4-1.79 4-4V7c0-2.21-1.79-4-4-4H8c-2.21 0-4 1.79-4 4z" />
+                        </svg>
+                        Connected: {currentDataset.name}
+                      </>
+                    ) : (
+                      <>Analyzing: {currentDataset.name}</>
+                    )}
                   </h2>
                   <p className="text-sm text-gray-400">
-                    {currentDataset.data.length.toLocaleString()} rows • {currentDataset.schema.columns.length} columns
+                    {currentDataset.isDatabase ? (
+                      <>
+                        {currentDataset.connectionInfo?.tablesCount} tables available • Database connection active
+                        {currentDataset.connectionInfo?.lastConnected && (
+                          <> • Connected at {currentDataset.connectionInfo.lastConnected.toLocaleTimeString()}</>
+                        )}
+                      </>
+                    ) : (
+                      <>{currentDataset.data.length.toLocaleString()} rows • {currentDataset.schema.columns.length} columns</>
+                    )}
                   </p>
                 </div>
                 
@@ -174,7 +274,7 @@ export default function Home() {
                   onClick={handleNewAnalysis}
                   className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors duration-200 text-sm"
                 >
-                  Upload New Dataset
+                  {currentDataset.isDatabase ? 'Disconnect & Upload New' : 'Upload New Dataset'}
                 </button>
               </div>
             </div>

@@ -4,6 +4,15 @@ export interface Dataset {
   data: Record<string, any>[];
   schema: TableSchema;
   uploadedAt: Date;
+  isDatabase?: boolean;
+  connectionInfo?: DatabaseConnectionInfo;
+}
+
+export interface DatabaseConnectionInfo {
+  connected: boolean;
+  tablesCount: number;
+  connectionString?: string;
+  lastConnected?: Date;
 }
 
 export interface TableSchema {

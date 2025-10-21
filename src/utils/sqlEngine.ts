@@ -41,8 +41,8 @@ export class SQLEngine {
   static async loadSampleData(): Promise<void> {
     await this.initialize();
     
-    // Load the sample CSV data with StateCode column
-    const response = await fetch('/sample-data-with-states.csv');
+    // Load the sample automotive CSV data with StateCode and SpecYear columns
+    const response = await fetch('/sample-automotive-data.csv');
     const csvText = await response.text();
     
     const data = Papa.parse(csvText, {
@@ -226,8 +226,8 @@ export class SQLEngine {
       result = this.applyWhereClause(result, whereClause);
     }
     
-    // Apply GROUP BY clause
-    const groupByMatch = normalizedQuery.match(/group\s+by\s+(.+?)(?:\s+order\s+by|\s+limit|$)/);
+    // Apply GROUP BY clause - use original query to preserve case
+    const groupByMatch = query.match(/GROUP\s+BY\s+(.+?)(?:\s+ORDER\s+BY|\s+LIMIT|$)/i);
     if (groupByMatch) {
       const groupByClause = groupByMatch[1].trim();
       result = this.applyGroupBy(result, groupByClause, query);
@@ -260,27 +260,49 @@ export class SQLEngine {
   }
 
   private static applyWhereClause(data: Record<string, any>[], whereClause: string): Record<string, any>[] {
-    // Handle simple equality conditions: column = 'value' or column = value
-    const equalityMatch = whereClause.match(/(\w+)\s*=\s*['"]([^'"]+)['"]|(\w+)\s*=\s*([^'"\s;]+)/);
+    // Handle complex WHERE clauses with AND, OR operators
+    return this.evaluateWhereExpression(data, whereClause);
+  }
+
+  private static evaluateWhereExpression(data: Record<string, any>[], expression: string): Record<string, any>[] {
+    // Normalize whitespace and newlines for proper parsing
+    const normalizedExpression = expression.replace(/\s+/g, ' ').trim();
     
-    if (equalityMatch) {
-      const column = equalityMatch[1] || equalityMatch[3];
-      const value = equalityMatch[2] || equalityMatch[4];
+    // Handle OR conditions first (lower precedence)
+    if (normalizedExpression.includes(' OR ')) {
+      const orParts = normalizedExpression.split(' OR ');
+      const results = new Set<Record<string, any>>();
       
-      return data.filter(row => {
-        const rowValue = row[column];
-        
-        // Handle string comparison (case-insensitive)
-        if (typeof rowValue === 'string' && typeof value === 'string') {
-          return rowValue.toLowerCase() === value.toLowerCase();
-        }
-        // Handle exact match for other types
-        return rowValue == value;
+      orParts.forEach(part => {
+        const partResults = this.evaluateWhereExpression(data, part.trim());
+        partResults.forEach(row => results.add(row));
       });
+      
+      return Array.from(results);
     }
     
+    // Handle AND conditions (higher precedence)
+    if (normalizedExpression.includes(' AND ')) {
+      const andParts = normalizedExpression.split(' AND ');
+      let result = data;
+      
+      andParts.forEach(part => {
+        result = this.evaluateWhereExpression(result, part.trim());
+      });
+      
+      return result;
+    }
+    
+    // Handle single conditions
+    return this.evaluateSingleCondition(data, normalizedExpression);
+  }
+
+  private static evaluateSingleCondition(data: Record<string, any>[], condition: string): Record<string, any>[] {
+    // Remove parentheses if present
+    condition = condition.replace(/^\(|\)$/g, '').trim();
+    
     // Handle LIKE conditions: column LIKE '%value%'
-    const likeMatch = whereClause.match(/(\w+)\s+like\s+['"]%([^%'"]+)%['"]?/i);
+    const likeMatch = condition.match(/(\w+)\s+LIKE\s+['"]%([^%'"]+)%['"]?/i);
     if (likeMatch) {
       const column = likeMatch[1];
       const value = likeMatch[2];
@@ -294,24 +316,83 @@ export class SQLEngine {
       });
     }
     
-    // Handle numeric comparisons: column > value, column < value, etc.
-    const comparisonMatch = whereClause.match(/(\w+)\s*([><=!]+)\s*(\d+(?:\.\d+)?)/);
-    if (comparisonMatch) {
-      const column = comparisonMatch[1];
-      const operator = comparisonMatch[2];
-      const value = parseFloat(comparisonMatch[3]);
+    // Handle IN conditions: column IN ('value1', 'value2')
+    const inMatch = condition.match(/(\w+)\s+IN\s*\(([^)]+)\)/i);
+    if (inMatch) {
+      const column = inMatch[1];
+      const values = inMatch[2].split(',').map(v => v.trim().replace(/['"]/g, ''));
+      
+      return data.filter(row => {
+        const rowValue = String(row[column]);
+        return values.some(val => rowValue.toLowerCase() === val.toLowerCase());
+      });
+    }
+    
+    // Handle BETWEEN conditions: column BETWEEN value1 AND value2
+    const betweenMatch = condition.match(/(\w+)\s+BETWEEN\s+(\d+(?:\.\d+)?)\s+AND\s+(\d+(?:\.\d+)?)/i);
+    if (betweenMatch) {
+      const column = betweenMatch[1];
+      const min = parseFloat(betweenMatch[2]);
+      const max = parseFloat(betweenMatch[3]);
       
       return data.filter(row => {
         const rowValue = parseFloat(row[column]);
-        if (isNaN(rowValue)) return false;
+        return !isNaN(rowValue) && rowValue >= min && rowValue <= max;
+      });
+    }
+    
+    // Handle IS NULL / IS NOT NULL
+    const nullMatch = condition.match(/(\w+)\s+IS\s+(NOT\s+)?NULL/i);
+    if (nullMatch) {
+      const column = nullMatch[1];
+      const isNotNull = !!nullMatch[2];
+      
+      return data.filter(row => {
+        const rowValue = row[column];
+        const isNull = rowValue === null || rowValue === undefined || rowValue === '';
+        return isNotNull ? !isNull : isNull;
+      });
+    }
+    
+    // Handle comparison operators: =, !=, <>, >, <, >=, <=
+    const comparisonMatch = condition.match(/(\w+)\s*([><=!]+|<>)\s*(['"]?)([^'"]*)\3/);
+    if (comparisonMatch) {
+      const column = comparisonMatch[1];
+      const operator = comparisonMatch[2];
+      const value = comparisonMatch[4];
+      
+      return data.filter(row => {
+        const rowValue = row[column];
+        
+        // Try numeric comparison first if both values can be converted to numbers
+        const rowNum = parseFloat(String(rowValue));
+        const valNum = parseFloat(String(value));
+        
+        if (!isNaN(rowNum) && !isNaN(valNum)) {
+          switch (operator) {
+            case '=': return rowNum === valNum;
+            case '!=':
+            case '<>': return rowNum !== valNum;
+            case '>': return rowNum > valNum;
+            case '<': return rowNum < valNum;
+            case '>=': return rowNum >= valNum;
+            case '<=': return rowNum <= valNum;
+            default: return false;
+          }
+        }
+        
+        // Fallback to string comparison (case-insensitive for equality)
+        const rowStr = String(rowValue).toLowerCase();
+        const valStr = String(value).toLowerCase();
         
         switch (operator) {
-          case '>': return rowValue > value;
-          case '<': return rowValue < value;
-          case '>=': return rowValue >= value;
-          case '<=': return rowValue <= value;
-          case '=': return rowValue === value;
-          case '!=': return rowValue !== value;
+          case '=': return rowStr === valStr;
+          case '!=':
+          case '<>': return rowStr !== valStr;
+          case '>': return rowStr > valStr;
+          case '<': return rowStr < valStr;
+          case '>=': return rowStr >= valStr;
+          case '<=': return rowStr <= valStr;
           default: return false;
         }
       });
@@ -326,48 +407,132 @@ export class SQLEngine {
     // Group data by the specified column
     const groups: Record<string, Record<string, any>[]> = {};
     data.forEach(row => {
-      const groupValue = row[groupColumn] || 'NULL';
-      if (!groups[groupValue]) {
-        groups[groupValue] = [];
+      const groupValue = row[groupColumn];
+      const groupKey = (groupValue === null || groupValue === undefined || groupValue === '') ? 'NULL' : String(groupValue);
+      
+      if (!groups[groupKey]) {
+        groups[groupKey] = [];
       }
-      groups[groupValue].push(row);
+      groups[groupKey].push(row);
     });
+    
+    // Parse SELECT clause to understand what columns and aggregations are needed
+    // Handle edge cases and complex SELECT clauses robustly
+    let selectClause: string = '';
+    
+    // Clean the query first - remove extra whitespace and normalize line breaks
+    const cleanQuery = originalQuery.replace(/\s+/g, ' ').trim();
+    
+    // Try multiple regex patterns to handle different SELECT clause formats
+    const patterns = [
+      /select\s+(.*?)\s+from\s+\w+/i,     // Standard: SELECT ... FROM table
+      /select\s+(.*?)\s+from/i,           // Fallback: SELECT ... FROM
+      /select\s+(.*)\s+from\s+\w+/i,      // Greedy: SELECT ... FROM table
+      /select\s+(.+?)\s+from/i,           // Simple: SELECT ... FROM
+      /select\s+(.*?)(?:\s+from|\s*$)/i,  // Last resort: SELECT ... (with or without FROM)
+      /select\s+(.+)/i                    // Ultimate fallback: SELECT ...
+    ];
+    
+    let matched = false;
+    for (const pattern of patterns) {
+      const match = cleanQuery.match(pattern);
+      if (match && match[1] && match[1].trim()) {
+        selectClause = match[1].trim();
+        matched = true;
+        break;
+      }
+    }
+    
+    // If still no match, try with the original query (in case cleaning broke something)
+    if (!matched) {
+      for (const pattern of patterns) {
+        const match = originalQuery.match(pattern);
+        if (match && match[1] && match[1].trim()) {
+          selectClause = match[1].trim();
+          matched = true;
+          break;
+        }
+      }
+    }
+    
+    if (!matched || !selectClause) {
+      console.error('Failed to parse SELECT clause from query:', originalQuery);
+      console.error('Cleaned query:', cleanQuery);
+      console.error('Query length:', originalQuery.length);
+      
+      // Try one more desperate attempt - extract everything between SELECT and FROM manually
+      const selectIndex = originalQuery.toLowerCase().indexOf('select');
+      const fromIndex = originalQuery.toLowerCase().indexOf('from');
+      
+      if (selectIndex !== -1 && fromIndex !== -1 && fromIndex > selectIndex) {
+        const extracted = originalQuery.substring(selectIndex + 6, fromIndex).trim();
+        if (extracted) {
+          console.log('Manual extraction succeeded:', extracted);
+          selectClause = extracted;
+          matched = true;
+        }
+      }
+      
+      if (!matched) {
+        throw new Error('Invalid SELECT clause - unable to parse column specifications');
+      }
+    }
+    const columnSpecs = selectClause.split(',').map(col => col.trim());
     
     // Apply aggregation functions
     const result: Record<string, any>[] = [];
     
-    Object.entries(groups).forEach(([groupValue, groupData]) => {
+    Object.entries(groups).forEach(([groupKey, groupData]) => {
       const aggregatedRow: Record<string, any> = {};
-      aggregatedRow[groupColumn] = groupValue === 'NULL' ? null : groupValue;
       
-      // Parse SELECT clause for aggregation functions
-      const selectMatch = originalQuery.match(/select\s+(.+?)\s+from/i);
-      if (selectMatch) {
-        const selectClause = selectMatch[1];
-        
+      // Process each column specification
+      columnSpecs.forEach(colSpec => {
         // Handle COUNT(*)
-        const countMatch = selectClause.match(/count\(\*\)\s+as\s+(\w+)/i);
+        const countMatch = colSpec.match(/count\(\*\)\s+(?:as\s+)?(\w+)/i);
         if (countMatch) {
-          aggregatedRow[countMatch[1]] = groupData.length;
+          const alias = countMatch[1];
+          aggregatedRow[alias] = groupData.length;
+          return;
         }
         
         // Handle AVG(column)
-        const avgMatch = selectClause.match(/avg\((\w+)\)\s+as\s+(\w+)/i);
+        const avgMatch = colSpec.match(/avg\((\w+)\)\s+(?:as\s+)?(\w+)/i);
         if (avgMatch) {
           const column = avgMatch[1];
           const alias = avgMatch[2];
           const sum = groupData.reduce((acc, row) => acc + (Number(row[column]) || 0), 0);
           aggregatedRow[alias] = Math.round((sum / groupData.length) * 100) / 100;
+          return;
         }
         
         // Handle SUM(column)
-        const sumMatch = selectClause.match(/sum\((\w+)\)\s+as\s+(\w+)/i);
+        const sumMatch = colSpec.match(/sum\((\w+)\)\s+(?:as\s+)?(\w+)/i);
         if (sumMatch) {
           const column = sumMatch[1];
           const alias = sumMatch[2];
           aggregatedRow[alias] = groupData.reduce((acc, row) => acc + (Number(row[column]) || 0), 0);
+          return;
         }
-      }
+        
+        // Handle regular columns (group by columns or other non-aggregated columns)
+        const aliasMatch = colSpec.match(/^(.+?)\s+(?:as\s+)?(\w+)$/i);
+        if (aliasMatch) {
+          // Column with alias: SpecMake AS Make
+          const sourceColumn = aliasMatch[1].trim();
+          const targetColumn = aliasMatch[2].trim();
+          
+          if (sourceColumn === groupColumn) {
+            // This is the group by column
+            aggregatedRow[targetColumn] = groupKey === 'NULL' ? null : groupKey;
+          }
+        } else {
+          // Column without alias
+          const columnName = colSpec.trim();
+          if (columnName === groupColumn) {
+            aggregatedRow[columnName] = groupKey === 'NULL' ? null : groupKey;
+          }
+        }
+      });
       
       result.push(aggregatedRow);
     });
@@ -376,38 +541,76 @@ export class SQLEngine {
   }
 
   private static applyOrderBy(data: Record<string, any>[], orderByClause: string): Record<string, any>[] {
-    const parts = orderByClause.split(/\s+/);
-    const column = parts[0];
-    const direction = parts[1]?.toLowerCase() === 'desc' ? 'desc' : 'asc';
+    // Handle multiple columns: ORDER BY col1 ASC, col2 DESC
+    const orderColumns = orderByClause.split(',').map(col => {
+      const parts = col.trim().split(/\s+/);
+      return {
+        column: parts[0],
+        direction: parts[1]?.toLowerCase() === 'desc' ? 'desc' : 'asc'
+      };
+    });
     
     return data.sort((a, b) => {
-      const aVal = a[column];
-      const bVal = b[column];
-      
-      if (aVal === null || aVal === undefined) return 1;
-      if (bVal === null || bVal === undefined) return -1;
-      
-      let comparison = 0;
-      if (typeof aVal === 'string' && typeof bVal === 'string') {
-        comparison = aVal.localeCompare(bVal);
-      } else {
-        comparison = Number(aVal) - Number(bVal);
+      for (const { column, direction } of orderColumns) {
+        const aVal = a[column];
+        const bVal = b[column];
+        
+        if (aVal === null || aVal === undefined) {
+          if (bVal === null || bVal === undefined) continue;
+          return 1;
+        }
+        if (bVal === null || bVal === undefined) return -1;
+        
+        let comparison = 0;
+        
+        // Handle different data types
+        if (typeof aVal === 'string' && typeof bVal === 'string') {
+          comparison = aVal.localeCompare(bVal);
+        } else if (typeof aVal === 'number' && typeof bVal === 'number') {
+          comparison = aVal - bVal;
+        } else if (!isNaN(Date.parse(aVal)) && !isNaN(Date.parse(bVal))) {
+          // Handle dates
+          comparison = new Date(aVal).getTime() - new Date(bVal).getTime();
+        } else {
+          // Fallback to string comparison
+          comparison = String(aVal).localeCompare(String(bVal));
+        }
+        
+        if (comparison !== 0) {
+          return direction === 'desc' ? -comparison : comparison;
+        }
       }
-      
-      return direction === 'desc' ? -comparison : comparison;
+      return 0;
     });
   }
 
   private static applyColumnSelection(data: Record<string, any>[], selectClause: string): Record<string, any>[] {
-    const columns = selectClause.split(',').map(col => col.trim().replace(/\s+as\s+\w+/i, ''));
+    const columnSpecs = selectClause.split(',').map(col => col.trim());
     
     return data.map(row => {
       const newRow: Record<string, any> = {};
-      columns.forEach(col => {
-        if (row.hasOwnProperty(col)) {
-          newRow[col] = row[col];
+      
+      columnSpecs.forEach(colSpec => {
+        // Handle column aliases: "ColumnName AS Alias" or "ColumnName Alias"
+        const aliasMatch = colSpec.match(/^(.+?)\s+(?:AS\s+)?(\w+)$/i);
+        
+        if (aliasMatch) {
+          // Column with alias
+          const sourceColumn = aliasMatch[1].trim();
+          const targetColumn = aliasMatch[2].trim();
+          
+          if (row.hasOwnProperty(sourceColumn)) {
+            newRow[targetColumn] = row[sourceColumn];
+          }
+        } else {
+          // Column without alias
+          const columnName = colSpec.trim();
+          if (row.hasOwnProperty(columnName)) {
+            newRow[columnName] = row[columnName];
+          }
         }
       });
+      
       return newRow;
     });
   }

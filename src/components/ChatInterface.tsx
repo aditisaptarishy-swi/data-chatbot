@@ -29,7 +29,9 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
     const welcomeMessage: ChatMessage = {
       id: 'welcome',
       type: 'assistant',
-      content: `Dataset "${dataset.name}" loaded successfully! You can now ask questions about your data. For example:\n\n• "Show me the first 10 rows"\n• "What are the column names?"\n• "Count the total number of records"\n• "Show me records where [column] > [value]"`,
+      content: dataset.isDatabase
+        ? `Connected to "${dataset.name}" successfully! You can now ask questions about your database. The AI will automatically determine which tables to query based on your questions. For example:\n\n• "Show me sales data from last month"\n• "What are the top performing products?"\n• "Count total customers by region"\n• "Show me recent transactions"`
+        : `Dataset "${dataset.name}" loaded successfully! You can now ask questions about your data. For example:\n\n• "Show me the first 10 rows"\n• "What are the column names?"\n• "Count the total number of records"\n• "Show me records where [column] > [value]"`,
       timestamp: new Date()
     };
     setMessages([welcomeMessage]);
@@ -51,21 +53,66 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
     setIsLoading(true);
 
     try {
-      const aiResponse = await AIService.generateSQL(inputValue.trim(), dataset.schema);
-      
+      let aiResponse;
       let queryResult: QueryResult | undefined;
       
-      if (aiResponse.query) {
-        const startTime = Date.now();
-        const resultData = DataProcessor.executeQuery(dataset.data, aiResponse.query);
-        const executionTime = Date.now() - startTime;
+      if (dataset.isDatabase) {
+        // Handle database queries
+        console.log('🔍 Processing database query:', inputValue.trim());
         
-        queryResult = {
-          data: resultData,
-          columns: resultData.length > 0 ? Object.keys(resultData[0]) : [],
-          rowCount: resultData.length,
-          executionTime
+        const response = await fetch('/api/usdb/query', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            query: inputValue.trim()
+          })
+        });
+
+        const result = await response.json();
+
+        if (!result.success) {
+          throw new Error(result.error || 'Database query failed');
+        }
+
+        aiResponse = {
+          query: result.query,
+          explanation: result.explanation,
+          chartSuggestion: result.chartSuggestion
         };
+
+        queryResult = {
+          data: result.results,
+          columns: result.results.length > 0 ? Object.keys(result.results[0]) : [],
+          rowCount: result.rowCount,
+          executionTime: 0 // Database execution time not tracked separately
+        };
+
+        console.log('✅ Database query executed successfully:', queryResult);
+        
+      } else {
+        // Handle CSV/Excel file queries (existing logic)
+        aiResponse = await AIService.generateSQL(inputValue.trim(), dataset.schema);
+        
+        if (aiResponse.query) {
+          const startTime = Date.now();
+          // Use SQL engine directly instead of passing dataset.data
+          const resultData = DataProcessor.executeQuery([], aiResponse.query);
+          const executionTime = Date.now() - startTime;
+          
+          console.log('🔍 Query result data:', resultData);
+          console.log('🔍 Result data length:', resultData.length);
+          
+          queryResult = {
+            data: resultData,
+            columns: resultData.length > 0 ? Object.keys(resultData[0]) : [],
+            rowCount: resultData.length,
+            executionTime
+          };
+          
+          console.log('🔍 Query result object:', queryResult);
+        }
       }
 
       const assistantMessage: ChatMessage = {

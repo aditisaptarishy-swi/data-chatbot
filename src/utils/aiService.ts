@@ -81,6 +81,124 @@ Format your response as JSON with the following structure:
     }
   }
 
+  static async generateSQLFromQuery(prompt: string, columns: any[], databaseSchema?: string): Promise<AIResponse> {
+    try {
+      // Use database schema if provided, otherwise fall back to regular schema
+      if (databaseSchema) {
+        console.log('🤖 Generating SQL with database schema context');
+        return this.generateSQLWithDatabaseSchema(prompt, databaseSchema);
+      } else {
+        // Fallback to existing method for CSV data
+        const tableSchema: TableSchema = {
+          tableName: 'dataset',
+          columns: columns.map(col => ({
+            name: col.name || col,
+            type: col.type || 'TEXT',
+            nullable: true
+          }))
+        };
+        return this.generateSQL(prompt, tableSchema);
+      }
+    } catch (error) {
+      console.error('Error in generateSQLFromQuery:', error);
+      throw error;
+    }
+  }
+
+  private static async generateSQLWithDatabaseSchema(prompt: string, databaseSchema: string): Promise<AIResponse> {
+    try {
+      console.log('🤖 Attempting to connect to AI API for database query:', this.API_URL);
+      
+      const systemPrompt = `You are a SQL expert. Given the following database schema, generate accurate SQL queries to answer user questions.
+
+${databaseSchema}
+
+Rules:
+1. Use proper SQL syntax for SQL Server
+2. Use exact table names with schema prefix (e.g., dbo.TableName)
+3. Use exact column names as provided in the schema
+4. For aggregations, use appropriate GROUP BY clauses
+5. For filtering, use proper WHERE conditions
+6. For sorting, use ORDER BY
+7. Be case-sensitive with column names
+8. If the query involves counting, use COUNT()
+9. If the query involves averages, use AVG()
+10. If the query involves sums, use SUM()
+11. Always provide a complete, executable SQL query
+12. Automatically determine which tables to query based on the user's question and available schema
+13. Use JOINs when the question requires data from multiple tables
+14. Add appropriate LIMIT or TOP clauses to prevent large result sets (use TOP for SQL Server)
+15. Use SQL Server specific syntax (TOP instead of LIMIT, etc.)`;
+
+      const fullPrompt = `${systemPrompt}\n\nUser Query: ${prompt}\n\nPlease provide:
+1. A SQL query to answer this question
+2. A brief explanation of what the query does
+3. If applicable, suggest a chart type for visualizing the results
+
+Format your response as JSON with the following structure:
+{
+  "query": "SELECT ...",
+  "explanation": "This query...",
+  "chartSuggestion": {
+    "type": "bar|line|pie|doughnut|scatter",
+    "reasoning": "This chart type is suitable because..."
+  }
+}`;
+
+      const response = await fetch(this.API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'gpt-oss:120b',
+          prompt: fullPrompt,
+          stream: true
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`AI API failed with status ${response.status}`);
+      }
+
+      // Handle streaming response
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No response body reader available');
+      }
+
+      let result = '';
+      const decoder = new TextDecoder();
+      
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          const chunk = decoder.decode(value, { stream: true });
+          result += chunk;
+        }
+      } catch (streamError) {
+        console.error('Error reading stream:', streamError);
+        throw streamError;
+      }
+
+      console.log('✅ AI API response received for database query, length:', result.length);
+      const aiResponse = this.parseAIResponse(result);
+      
+      if (!aiResponse.query) {
+        throw new Error('AI returned empty query');
+      }
+      
+      console.log('🎯 Using AI-generated database query:', aiResponse.query);
+      return aiResponse;
+      
+    } catch (error) {
+      console.error('Database AI Service Error:', error);
+      throw new Error(`Failed to generate SQL query: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
   private static generateFallbackQuery(prompt: string, schema: TableSchema): AIResponse {
     const lowerPrompt = prompt.toLowerCase().trim();
     const tableName = schema.tableName;
@@ -250,9 +368,14 @@ Format your response as JSON with the following structure:
 Columns:
 ${schema.columns.map(col => `- ${col.name} (${col.type}${col.nullable ? ', nullable' : ''})`).join('\n')}`;
 
+    // Provide specific guidance for automotive dataset columns
+    const columnGuidance = this.getColumnGuidance(schema.columns.map(col => col.name));
+
     return `You are a SQL expert. Given the following database schema, generate accurate SQL queries to answer user questions.
 
 ${tableInfo}
+
+${columnGuidance}
 
 Rules:
 1. Use proper SQL syntax
@@ -265,7 +388,36 @@ Rules:
 8. If the query involves counting, use COUNT()
 9. If the query involves averages, use AVG()
 10. If the query involves sums, use SUM()
-11. Always provide a complete, executable SQL query`;
+11. Always provide a complete, executable SQL query
+12. When asked for car brands or makes, prefer "Make" over "SpecMake"
+13. When asked for car models, always include "Model" column
+14. When asked for prices, use "ListingPrice" column
+15. When filtering by state, use "StateCode" column
+16. When filtering by year, use "SpecYear" column`;
+  }
+
+  private static getColumnGuidance(columns: string[]): string {
+    const hasAutomotiveColumns = columns.some(col =>
+      ['Make', 'Model', 'ListingPrice', 'StateCode', 'SpecYear'].includes(col)
+    );
+
+    if (hasAutomotiveColumns) {
+      return `
+Column Usage Guidelines for Automotive Data:
+- For car brands/makes: Use "Make" (preferred) or "SpecMake"
+- For car models: Use "Model" (preferred) or "SpecModel"
+- For prices: Use "ListingPrice"
+- For states: Use "StateCode"
+- For years: Use "SpecYear"
+- For mileage: Use "Mileage"
+
+When user asks for:
+- "Ford cars with model names and prices" → SELECT Make, Model, ListingPrice FROM dataset WHERE Make = 'Ford'
+- "Car brands with most listings" → SELECT Make, COUNT(*) as ListingCount FROM dataset GROUP BY Make ORDER BY ListingCount DESC
+- "Cars from Arizona in 2017" → SELECT * FROM dataset WHERE StateCode = 'AZ' AND SpecYear = 2017`;
+    }
+
+    return '';
   }
 
   private static parseAIResponse(response: string): AIResponse {
