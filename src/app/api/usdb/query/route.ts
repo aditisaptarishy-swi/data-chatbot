@@ -17,11 +17,17 @@ export async function POST(request: NextRequest) {
     
     const dbConnection = DatabaseConnection.getInstance();
     
+    // Ensure connection is active (will reconnect if needed)
     if (!dbConnection.isConnectedToDatabase()) {
-      return NextResponse.json({
-        success: false,
-        error: 'Not connected to database. Please connect first.'
-      }, { status: 400 });
+      console.log('⚠️ Database not connected, attempting to connect...');
+      try {
+        await dbConnection.connect();
+      } catch (connectError) {
+        return NextResponse.json({
+          success: false,
+          error: `Failed to connect to database: ${connectError instanceof Error ? connectError.message : 'Unknown error'}`
+        }, { status: 500 });
+      }
     }
     
     // Get database schema for AI context

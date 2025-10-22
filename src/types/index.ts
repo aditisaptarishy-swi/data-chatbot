@@ -6,6 +6,22 @@ export interface Dataset {
   uploadedAt: Date;
   isDatabase?: boolean;
   connectionInfo?: DatabaseConnectionInfo;
+  tables?: DatabaseTable[]; // For database connections
+}
+
+export interface DatabaseTable {
+  name: string;
+  schema: string;
+  columnCount: number;
+  columns: DatabaseColumn[];
+}
+
+export interface DatabaseColumn {
+  name: string;
+  type: string;
+  nullable: boolean;
+  isPrimaryKey?: boolean;
+  isForeignKey?: boolean;
 }
 
 export interface DatabaseConnectionInfo {
@@ -33,6 +49,16 @@ export interface ChatMessage {
   timestamp: Date;
   query?: string;
   result?: QueryResult;
+  isStreaming?: boolean;
+  streamingSteps?: StreamingStep[];
+}
+
+export interface StreamingStep {
+  id: string;
+  status: 'pending' | 'in-progress' | 'complete' | 'error';
+  message: string;
+  timestamp: Date;
+  data?: any; // For SQL query, row count, etc.
 }
 
 export interface QueryResult {

@@ -54,7 +54,8 @@ export default function Home() {
           connected: true,
           tablesCount: result.tablesCount,
           lastConnected: new Date()
-        }
+        },
+        tables: result.tables // Store the database tables with their schemas
       };
 
       setCurrentDataset(databaseDataset);

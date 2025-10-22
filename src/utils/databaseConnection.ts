@@ -218,17 +218,35 @@ class DatabaseConnection {
   }
 
   async executeQuery(query: string): Promise<any[]> {
-    if (!this.pool) {
-      throw new Error('Database not connected');
+    // Check if pool exists and is connected, reconnect if needed
+    if (!this.pool || !this.isConnected) {
+      console.log('⚠️ Database not connected, attempting to reconnect...');
+      await this.connect();
     }
 
     try {
       console.log('🔍 Executing database query:', query);
-      const result = await this.pool.request().query(query);
+      const result = await this.pool!.request().query(query);
       console.log(`✅ Query executed successfully, returned ${result.recordset.length} rows`);
       return result.recordset;
     } catch (error) {
       console.error('❌ Query execution failed:', error);
+      
+      // If connection error, try to reconnect once
+      const errorMessage = error instanceof Error ? error.message : '';
+      if (errorMessage.includes('connection') || errorMessage.includes('closed') || errorMessage.includes('ECONNRESET')) {
+        console.log('🔄 Connection lost, attempting to reconnect...');
+        this.isConnected = false;
+        this.pool = null;
+        await this.connect();
+        
+        // Retry the query once
+        console.log('🔄 Retrying query after reconnection...');
+        const result = await this.pool!.request().query(query);
+        console.log(`✅ Query executed successfully after reconnection, returned ${result.recordset.length} rows`);
+        return result.recordset;
+      }
+      
       throw new Error(`Query execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
@@ -238,7 +256,8 @@ class DatabaseConnection {
   }
 
   isConnectedToDatabase(): boolean {
-    return this.isConnected;
+    // Check both flag and pool existence
+    return this.isConnected && this.pool !== null;
   }
 
   getSchemaForAI(): string {

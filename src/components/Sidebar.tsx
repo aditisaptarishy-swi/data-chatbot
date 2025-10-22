@@ -54,21 +54,55 @@ export default function Sidebar({ currentDataset, onNewAnalysis, onDatasetSelect
             </div>
             
             <div className="space-y-1 text-xs text-gray-400">
-              <div>Rows: {currentDataset.data.length.toLocaleString()}</div>
-              <div>Columns: {currentDataset.schema.columns.length}</div>
-              <div>Size: {formatFileSize(getDatasetSize(currentDataset))}</div>
-              <div>Uploaded: {currentDataset.uploadedAt.toLocaleDateString()}</div>
+              {currentDataset.isDatabase ? (
+                <>
+                  <div>Tables: {currentDataset.tables?.length || 0}</div>
+                  <div>Total Columns: {currentDataset.tables?.reduce((sum, table) => sum + table.columnCount, 0) || 0}</div>
+                  <div>Connected: {currentDataset.uploadedAt.toLocaleDateString()}</div>
+                </>
+              ) : (
+                <>
+                  <div>Rows: {currentDataset.data.length.toLocaleString()}</div>
+                  <div>Columns: {currentDataset.schema.columns.length}</div>
+                  <div>Size: {formatFileSize(getDatasetSize(currentDataset))}</div>
+                  <div>Uploaded: {currentDataset.uploadedAt.toLocaleDateString()}</div>
+                </>
+              )}
             </div>
             
             <div className="mt-3">
               <div className="text-xs text-gray-400 mb-1">Schema:</div>
-              <div className="max-h-32 overflow-y-auto space-y-1">
-                {currentDataset.schema.columns.map((col, index) => (
-                  <div key={index} className="flex justify-between text-xs">
-                    <span className="text-gray-300 truncate">{col.name}</span>
-                    <span className="text-gray-500 ml-2">{col.type}</span>
-                  </div>
-                ))}
+              <div className="max-h-64 overflow-y-auto space-y-2">
+                {currentDataset.isDatabase && currentDataset.tables ? (
+                  // Display database tables with their columns
+                  currentDataset.tables.map((table, tableIndex) => (
+                    <div key={tableIndex} className="border-l-2 border-blue-500 pl-2">
+                      <div className="text-xs font-semibold text-blue-400 mb-1">
+                        {table.name} ({table.columnCount} columns)
+                      </div>
+                      <div className="space-y-0.5 ml-2">
+                        {table.columns.map((col, colIndex) => (
+                          <div key={colIndex} className="flex justify-between text-xs">
+                            <span className="text-gray-300 truncate flex items-center gap-1">
+                              {col.isPrimaryKey && <span className="text-yellow-400">🔑</span>}
+                              {col.isForeignKey && <span className="text-purple-400">🔗</span>}
+                              {col.name}
+                            </span>
+                            <span className="text-gray-500 ml-2">{col.type}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  // Display file columns
+                  currentDataset.schema.columns.map((col, index) => (
+                    <div key={index} className="flex justify-between text-xs">
+                      <span className="text-gray-300 truncate">{col.name}</span>
+                      <span className="text-gray-500 ml-2">{col.type}</span>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>

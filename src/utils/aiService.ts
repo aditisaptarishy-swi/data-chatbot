@@ -1,7 +1,218 @@
-import { TableSchema, AIResponse, ChartConfig } from '@/types';
+import { TableSchema, AIResponse, ChartConfig, DatabaseTable } from '@/types';
 
 export class AIService {
-  private static readonly API_URL = 'https://16c0c1a36195.ngrok-free.app/api/generate';
+  private static readonly API_URL = process.env.NEXT_PUBLIC_AI_API_URL || 'https://16c0c1a36195.ngrok-free.app/api/generate';
+
+  /**
+   * Generate natural, conversational questions based on database schema
+   */
+  static async generateNaturalQuestions(tables: DatabaseTable[]): Promise<string[]> {
+    try {
+      console.log('🤖 Generating natural questions from schema...');
+      
+      // Build schema context for AI
+      const schemaContext = tables.map(table => {
+        const columnList = table.columns
+          .map(col => `  - ${col.name} (${col.type})`)
+          .join('\n');
+        return `Table: ${table.name}\nColumns:\n${columnList}`;
+      }).join('\n\n');
+
+      const prompt = `Based on this database schema, generate 5 SIMPLE, SHORT questions that a business user would ask. Keep questions under 10 words each.
+
+Schema:
+${schemaContext}
+
+Requirements:
+- Keep questions SHORT and SIMPLE (under 10 words)
+- Use everyday language, not technical terms
+- NO table or column names in questions
+- Questions should be easy to understand
+- Focus on common business questions like counts, totals, lists, and summaries
+
+Examples of GOOD questions:
+- "How many dealers do we have?"
+- "Show me recent sales"
+- "What's the total revenue?"
+- "List all active customers"
+- "Which products sell best?"
+
+Examples of BAD questions (too complex):
+- "Return only the lines.How many vehicles did each of our dealerships sell in the past month, and which makes were the most popular?"
+- "What is the average time a listing stays on the market before it's sold, broken down by vehicle year and model?"
+
+Return ONLY 5 simple questions, one per line. No numbering, bullets, or extra text.`;
+
+      const response = await fetch(this.API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'gpt-oss:120b',
+          prompt: prompt,
+          stream: true
+        })
+      });
+
+      if (!response.ok) {
+        console.warn('AI API failed, using fallback questions');
+        return this.getFallbackQuestions(tables);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        console.warn('No response reader, using fallback questions');
+        return this.getFallbackQuestions(tables);
+      }
+
+      let result = '';
+      const decoder = new TextDecoder();
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value, { stream: true });
+        result += chunk;
+      }
+
+      // Parse the streaming response
+      const questions = this.parseQuestionsFromAIResponse(result);
+      
+      if (questions.length === 0) {
+        console.warn('No questions extracted, using fallback');
+        return this.getFallbackQuestions(tables);
+      }
+
+      console.log('✅ Generated natural questions:', questions);
+      return questions;
+      
+    } catch (error) {
+      console.error('Error generating natural questions:', error);
+      return this.getFallbackQuestions(tables);
+    }
+  }
+
+  /**
+   * Parse questions from AI streaming response
+   */
+  private static parseQuestionsFromAIResponse(response: string): string[] {
+    try {
+      // Extract content from streaming JSON format
+      let fullContent = '';
+      const lines = response.split('\n').filter(line => line.trim());
+      
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line.trim());
+          if (parsed.response) {
+            fullContent += parsed.response;
+          } else if (parsed.thinking) {
+            fullContent += parsed.thinking;
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      // Split by newlines and filter
+      const questions = fullContent
+        .split('\n')
+        .map(q => q.trim())
+        .filter(q => q.length > 0)
+        .filter(q => !q.match(/^[\d\.\-\*\)]+/)) // Remove numbered/bulleted items
+        .filter(q => {
+          // Must be a question or command
+          const isQuestion = q.includes('?') ||
+                           q.toLowerCase().startsWith('show') ||
+                           q.toLowerCase().startsWith('what') ||
+                           q.toLowerCase().startsWith('how') ||
+                           q.toLowerCase().startsWith('list') ||
+                           q.toLowerCase().startsWith('get') ||
+                           q.toLowerCase().startsWith('find') ||
+                           q.toLowerCase().startsWith('which') ||
+                           q.toLowerCase().startsWith('give');
+          
+          // Filter out overly complex questions (more than 15 words)
+          const wordCount = q.split(/\s+/).length;
+          const isSimple = wordCount <= 15;
+          
+          // Filter out questions with technical jargon
+          const hasTechnicalTerms = q.toLowerCase().includes('table') ||
+                                   q.toLowerCase().includes('column') ||
+                                   q.toLowerCase().includes('schema') ||
+                                   q.toLowerCase().includes('database');
+          
+          return isQuestion && isSimple && !hasTechnicalTerms;
+        })
+        .slice(0, 5);
+
+      return questions;
+    } catch (error) {
+      console.error('Error parsing questions:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Generate fallback questions when AI is unavailable
+   */
+  private static getFallbackQuestions(tables: DatabaseTable[]): string[] {
+    if (!tables || tables.length === 0) {
+      return [
+        "How many records are there?",
+        "Show me the latest entries",
+        "What's in the dataset?",
+        "Give me a summary",
+        "Show me some examples"
+      ];
+    }
+
+    const questions: string[] = [];
+    
+    // Analyze table names to generate contextual questions
+    const tableNames = tables.map(t => t.name.toLowerCase());
+    
+    // Simple, contextual questions based on table names
+    if (tableNames.some(name => name.includes('customer') || name.includes('client'))) {
+      questions.push("How many customers do we have?");
+      questions.push("Show me recent customers");
+    } else if (tableNames.some(name => name.includes('dealer') || name.includes('vendor'))) {
+      questions.push("How many dealers are there?");
+      questions.push("Show me all dealers");
+    } else if (tableNames.some(name => name.includes('product') || name.includes('item'))) {
+      questions.push("How many products are available?");
+      questions.push("Show me the products");
+    } else if (tableNames.some(name => name.includes('vehicle') || name.includes('car'))) {
+      questions.push("How many vehicles are listed?");
+      questions.push("Show me recent vehicles");
+    } else {
+      questions.push("How many records are there?");
+      questions.push("Show me the data");
+    }
+
+    // Add simple aggregation questions
+    if (tableNames.some(name => name.includes('sale') || name.includes('order'))) {
+      questions.push("What are the recent sales?");
+    } else if (tableNames.some(name => name.includes('price') || name.includes('cost'))) {
+      questions.push("What's the average price?");
+    } else {
+      questions.push("Give me a summary");
+    }
+
+    // Add location-based question if relevant
+    if (tableNames.some(name => name.includes('state') || name.includes('region') || name.includes('location'))) {
+      questions.push("Show me by location");
+    } else {
+      questions.push("What are the totals?");
+    }
+
+    // Add a trend question
+    questions.push("Show me the top results");
+
+    return questions.slice(0, 5);
+  }
 
   static async generateSQL(prompt: string, schema: TableSchema): Promise<AIResponse> {
     try {
