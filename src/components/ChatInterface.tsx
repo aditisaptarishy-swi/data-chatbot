@@ -19,6 +19,7 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
   const [activeTab, setActiveTab] = useState<'table' | 'chart'>('table');
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const [streamingMessage, setStreamingMessage] = useState<ChatMessage | null>(null);
+  const streamingMessageRef = useRef<ChatMessage | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -36,6 +37,7 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
           "Show me all dealers",
           "What's the total inventory count?",
           "Show me recent listings",
+          "How many vehicles were sold in October 2024?",
           "Which states have the most dealers?"
         ];
         setSuggestedQuestions(predefinedQuestions);
@@ -81,24 +83,45 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
 
   // Helper functions for streaming steps
   const updateStreamingStep = (stepId: string, updates: Partial<StreamingStep>) => {
+    console.log('🔄 updateStreamingStep called:', { stepId, updates });
     setStreamingMessage(prev => {
-      if (!prev || !prev.streamingSteps) return prev;
-      return {
+      if (!prev || !prev.streamingSteps) {
+        console.log('⚠️ updateStreamingStep: No prev message or steps');
+        return prev;
+      }
+      const updated = {
         ...prev,
         streamingSteps: prev.streamingSteps.map(step =>
           step.id === stepId ? { ...step, ...updates } : step
         )
       };
+      streamingMessageRef.current = updated;  // Update ref
+      console.log('✅ updateStreamingStep: Updated state', {
+        stepId,
+        totalSteps: updated.streamingSteps.length,
+        updatedStep: updated.streamingSteps.find(s => s.id === stepId)
+      });
+      return updated;
     });
   };
 
   const addStreamingStep = (step: StreamingStep) => {
+    console.log('➕ addStreamingStep called:', { stepId: step.id, message: step.message });
     setStreamingMessage(prev => {
-      if (!prev) return prev;
-      return {
+      if (!prev) {
+        console.log('⚠️ addStreamingStep: No prev message');
+        return prev;
+      }
+      const updated = {
         ...prev,
         streamingSteps: [...(prev.streamingSteps || []), step]
       };
+      streamingMessageRef.current = updated;  // Update ref
+      console.log('✅ addStreamingStep: Updated state', {
+        totalSteps: updated.streamingSteps.length,
+        allSteps: updated.streamingSteps.map(s => ({ id: s.id, status: s.status, message: s.message }))
+      });
+      return updated;
     });
   };
 
@@ -145,6 +168,7 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
       ]
     };
     setStreamingMessage(streamingMsg);
+    streamingMessageRef.current = streamingMsg;  // Store in ref
 
     try {
       let aiResponse;
@@ -179,6 +203,13 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
 
         const result = await response.json();
 
+        console.log('📦 API Response received:', {
+          success: result.success,
+          hasQuery: !!result.query,
+          hasResults: !!result.results,
+          rowCount: result.rowCount
+        });
+
         if (!result.success) {
           updateStreamingStep('2', { status: 'error' });
           addStreamingStep({
@@ -190,8 +221,12 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
           throw new Error(result.error || 'Database query failed');
         }
 
-        // Step 3: SQL Generated
+        // Step 2: Complete - SQL Generated (API already generated and executed)
         updateStreamingStep('2', { status: 'complete' });
+        
+        console.log('✅ Step 2 completed - SQL generated');
+        
+        // Step 3: Show the generated SQL
         addStreamingStep({
           id: '3',
           status: 'complete',
@@ -200,16 +235,23 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
           data: { sql: result.query }
         });
 
-        // Step 4: Executing query
+        console.log('✅ Step 3 added - Showing SQL:', result.query);
+
+        // Delay to let user see the SQL query
+        await new Promise(resolve => setTimeout(resolve, 800));
+
+        // Step 4: Processing results (execution already happened on backend)
         addStreamingStep({
           id: '4',
           status: 'in-progress',
-          message: '⚡ Executing query on database...',
+          message: '⚡ Processing results...',
           timestamp: new Date()
         });
 
-        // Small delay to show execution step
-        await new Promise(resolve => setTimeout(resolve, 200));
+        console.log('✅ Step 4 added - Processing results');
+
+        // Small delay to show processing step
+        await new Promise(resolve => setTimeout(resolve, 300));
 
         aiResponse = {
           query: result.query,
@@ -234,6 +276,7 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
           timestamp: new Date()
         });
 
+        console.log('✅ Step 5 added - Query completed:', { rowCount: queryResult.rowCount, columns: queryResult.columns.length });
         console.log('✅ Database query executed successfully:', queryResult);
         
       } else {
@@ -259,6 +302,9 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
             timestamp: new Date(),
             data: { sql: aiResponse.query }
           });
+
+          // Delay to let user see the SQL query before execution starts
+          await new Promise(resolve => setTimeout(resolve, 800));
 
           addStreamingStep({
             id: '4',
@@ -294,27 +340,49 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
       // Small delay before showing final result
       await new Promise(resolve => setTimeout(resolve, 300));
 
-      // Convert streaming message to final message
-      const assistantMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        type: 'assistant',
+      // ✅ Use the ref which has all the steps
+      const currentStreamingMessage = streamingMessageRef.current;
+
+      if (!currentStreamingMessage) {
+        console.error('❌ streamingMessage is null, cannot create completed message');
+        setIsLoading(false);
+        return;
+      }
+
+      // Keep streaming steps and add final content to the same message
+      const completedMessage: ChatMessage = {
+        ...currentStreamingMessage,  // Now has all 5 steps!
+        isStreaming: false,
         content: aiResponse.explanation,
-        timestamp: new Date(),
         query: aiResponse.query,
-        result: queryResult
+        result: queryResult,
+        timestamp: currentStreamingMessage.timestamp || new Date()
       };
 
-      setMessages(prev => [...prev, assistantMessage]);
+      // Add to messages and clear streaming in separate operations
+      // React will batch these updates properly
+      setMessages(prev => [...prev, completedMessage]);
       setStreamingMessage(null);
       
     } catch (error) {
-      // Update streaming message to show error
+      // Check if streamingMessage exists before updating it
       if (streamingMessage) {
-        addStreamingStep({
-          id: 'error',
-          status: 'error',
-          message: `❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          timestamp: new Date()
+        setStreamingMessage(prev => {
+          if (prev) {
+            return {
+              ...prev,
+              streamingSteps: [
+                ...(prev.streamingSteps || []),
+                {
+                  id: 'error',
+                  status: 'error',
+                  message: `❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                  timestamp: new Date()
+                }
+              ]
+            };
+          }
+          return prev;
         });
         
         // Wait a bit then clear streaming and show error message
@@ -349,8 +417,8 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
                 {step.message}
               </span>
               {step.data?.sql && (
-                <div className="mt-2 p-2 bg-gray-900 rounded border border-gray-700">
-                  <code className="text-xs text-blue-400 font-mono break-all">{step.data.sql}</code>
+                <div className="mt-2 p-3 bg-gray-900 rounded border border-gray-700">
+                  <code className="text-xs text-green-400 font-mono block whitespace-pre-wrap break-words">{step.data.sql}</code>
                 </div>
               )}
             </div>
@@ -361,6 +429,12 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
   };
 
   const renderMessage = (message: ChatMessage) => {
+    // Add null check at the start
+    if (!message) {
+      console.error('renderMessage called with null message');
+      return null;
+    }
+    
     const isUser = message.type === 'user';
     const isWelcomeMessage = message.id === 'welcome';
     
@@ -378,9 +452,40 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
               ? 'bg-blue-600 text-white ml-auto'
               : 'bg-gray-800 text-gray-100'
           }`}>
-            {message.content && <div className="whitespace-pre-wrap">{message.content}</div>}
+            {/* Show thinking process for completed messages with streaming steps */}
+            {!message.isStreaming && message.streamingSteps && message.streamingSteps.length > 0 && (
+              <details className="mb-4" open>
+                <summary className="cursor-pointer text-sm text-gray-400 hover:text-gray-300 mb-2 select-none">
+                  🧠 Thinking Process ({message.streamingSteps.length} steps)
+                </summary>
+                <div className="space-y-2 pl-4 border-l-2 border-gray-700 mt-2">
+                  {message.streamingSteps.map(step => (
+                    <div key={step.id} className="flex items-start gap-2 text-sm">
+                      <div className="flex-shrink-0 mt-0.5">
+                        {step.status === 'complete' && <Check className="h-3 w-3 text-green-400" />}
+                        {step.status === 'error' && <X className="h-3 w-3 text-red-400" />}
+                      </div>
+                      <div className="flex-1">
+                        <span className="text-gray-400">{step.message}</span>
+                        {step.data?.sql && (
+                          <div className="mt-1 p-3 bg-gray-900 rounded border border-gray-700">
+                            <code className="text-xs text-green-400 font-mono block whitespace-pre-wrap break-words">
+                              {step.data.sql}
+                            </code>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
             
+            {/* Show streaming steps for in-progress messages */}
             {message.isStreaming && message.streamingSteps && renderStreamingSteps(message.streamingSteps)}
+            
+            {/* Show final content */}
+            {message.content && !message.streamingSteps && <div className="whitespace-pre-wrap">{message.content}</div>}
             
             {isWelcomeMessage && suggestedQuestions.length > 0 && (
               <div className="mt-4 flex flex-wrap gap-2">
@@ -394,13 +499,6 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
                     {question}
                   </button>
                 ))}
-              </div>
-            )}
-            
-            {message.query && (
-              <div className="mt-3 p-3 bg-gray-900 rounded border border-gray-700">
-                <div className="text-xs text-gray-400 mb-1">Generated SQL:</div>
-                <code className="text-sm text-green-400 font-mono">{message.query}</code>
               </div>
             )}
           </div>
@@ -448,7 +546,7 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
           )}
           
           <div className="text-xs text-gray-500 mt-1">
-            {message.timestamp.toLocaleTimeString()}
+            {message.timestamp?.toLocaleTimeString()}
           </div>
         </div>
         
@@ -465,9 +563,9 @@ export default function ChatInterface({ dataset }: ChatInterfaceProps) {
     <div className="flex flex-col h-full">
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
-        {messages.map(renderMessage)}
+        {messages.filter(msg => msg !== null).map(renderMessage)}
         
-        {streamingMessage && renderMessage(streamingMessage)}
+        {streamingMessage && streamingMessage.isStreaming && renderMessage(streamingMessage)}
         
         <div ref={messagesEndRef} />
       </div>
